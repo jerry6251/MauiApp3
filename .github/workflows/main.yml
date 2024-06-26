@@ -19,7 +19,7 @@ jobs:
           dotnet-version: 8.0.x
   
       - name: Install MAUI Workload
-        run: dotnet workload install maui
+        run: sudo dotnet workload install maui
   
       - name: Restore Dependencies
         run: dotnet restore MauiApp3/
