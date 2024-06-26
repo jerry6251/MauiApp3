@@ -1,0 +1,47 @@
+name: main
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+  
+    name: Android Build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+    
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+  
+      - name: Install MAUI Workload
+        run: sudo dotnet workload install maui-android
+  
+      - name: Restore Dependencies
+        run: sudo dotnet restore MauiApp3/
+  
+      - name: Publish MAUI Android
+        run: >
+            dotnet publish MauiApp3/
+            -c Debug
+            -f net8.0-android
+            -o build/android
+            -p:CSharpier_Bypass=true
+  
+      - name: Rename file
+        run: |
+          set -e
+  
+          mv build/android/*-Signed.apk MauiApp3.apk
+        shell: bash
+        
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build
+          path: build/android/
+          if-no-files-found: error

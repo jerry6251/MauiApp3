@@ -1,0 +1,184 @@
+name: iOS Publish
+
+on:
+  workflow_call:
+    inputs:
+      dotnet-version:
+        required: true
+        type: string
+      dotnet-version-target:
+        required: true
+        type: string
+      xcode-version:
+        required: true
+        type: string
+      project-file:
+        required: true
+        type: string
+      project-folder:
+        required: true
+        type: string
+      build-config:
+        required: true
+        type: string
+      build-version:
+        required: true
+        type: string
+      company:
+        required: true
+        type: string
+      app-id:
+        required: false
+        type: string
+      app-title:
+        required: false
+        type: string
+      app-identifier:
+        required: false
+        type: string
+    secrets:      
+      p12-cert:
+        required: true
+      p12-cert-password:
+        required: true
+      appstore-issuer:
+        required: true
+      appstore-keyid:
+        required: true
+      appstore-private-key:
+        required: true
+
+jobs:
+  publish-ios:
+    runs-on: macos-13
+    name: iOS Publish
+
+    steps:
+      - name: Install private API key P8
+        env:
+          PRIVATE_API_KEY_BASE64: ${{ secrets.appstore-private-key }}
+          API_KEY: ${{ secrets.appstore-keyid }}
+        run: | 
+          mkdir -p ~/private_keys
+          echo -n "$PRIVATE_API_KEY_BASE64" | base64 --decode -o ~/private_keys/AuthKey_$API_KEY.p8
+
+      #- name: Set XCode version
+      #  uses: maxim-lobanov/setup-xcode@v1
+      #  with:
+      #    xcode-version: ${{ inputs.xcode-version }}
+      # Replaced with below (taken from https://github.com/ppy/osu/blob/master/.github/workflows/ci.yml)
+      - name: Select Xcode 15.2
+        run: sudo xcode-select -s /Applications/Xcode_15.2.app/Contents/Developer
+
+      - name: Setup .NET ${{ inputs.dotnet-version }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Checkout the code
+        uses: actions/checkout@v4
+
+      - name: Override files
+        if: ${{ inputs.company != 'default' }}
+        run:  cp -rv specifics/${{ inputs.company }}/. PhoenixPortal/
+        shell: bash
+
+      # These expire on a yearly basis, so check if they're still valid!
+      - uses: apple-actions/import-codesign-certs@v3
+        with: 
+          p12-file-base64: ${{ secrets.p12-cert }}
+          p12-password: ${{ secrets.p12-cert-password }}
+
+      - name: Download Provisioning Profiles
+        id: provisioning
+        uses: apple-actions/download-provisioning-profiles@v3
+        with: 
+          bundle-id: '${{ inputs.app-id }}'
+          profile-type: 'IOS_APP_STORE'
+          issuer-id: ${{ secrets.appstore-issuer }}
+          api-key-id: ${{ secrets.appstore-keyid }}
+          api-private-key: ${{ secrets.appstore-private-key }}
+
+      # This step might be obsolete at some point as .NET MAUI workloads 
+      # are starting to come pre-installed on the GH Actions build agents.
+      - name: Install MAUI Workload
+        #run: dotnet workload install maui --ignore-failed-sources
+        run: dotnet workload install maui-ios
+
+      - name: Restore Dependencies
+        run: dotnet restore ${{ inputs.project-file }}
+
+      #- name: Version the app
+      #  uses: managedcode/MAUIAppVersion@v1
+      #  with: 
+      #    csproj: ${{ inputs.project-file }}
+      #    version: ${{ github.run_number }} # to keep value unique
+      #    displayVersion: ${{ inputs.build-version }}.${{ github.run_number }}
+      #    printFile: true # optional
+
+      - name: Publish the iOS app
+        run: >
+            dotnet publish ${{ inputs.project-file }}
+            -c ${{ inputs.build-config }}
+            -f:${{ inputs.dotnet-version-target }}-ios
+            -p:RuntimeIdentifier=ios-arm64
+            -p:CodesignKey="Apple Distribution: Gerald Yearwood (F2V4WU4G4Y)"
+            -p:CodesignProvision="${{ inputs.app-identifier }}"
+            -p:ArchiveOnBuild=true
+            -p:EnableAssemblyILStripping=false
+            -p:AppId="${{ inputs.app-id }}"
+            -p:AppTitle="${{ inputs.app-title }}"
+            -o build/ios
+        #run: dotnet publish ${{ inputs.project-file }} -c ${{ inputs.build-config }} -f:${{ inputs.dotnet-version-target }}-ios /p:ArchiveOnBuild=true /p:EnableAssemblyILStripping=false -o build/ios
+
+      - name: Upload iOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.company == 'default' && 'ios-build' || format('{0}-{1}', 'ios-build', inputs.company) }}
+          path: build/ios/
+          if-no-files-found: error
+
+  deploy:
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+
+    needs:
+      - publish-ios
+
+    runs-on: macos-13
+
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Install private API key P8
+        env:
+          PRIVATE_API_KEY_BASE64: ${{ secrets.appstore-private-key }}
+          API_KEY: ${{ secrets.appstore-keyid }}
+        run: | 
+          mkdir -p ~/private_keys
+          echo -n "$PRIVATE_API_KEY_BASE64" | base64 --decode -o ~/private_keys/AuthKey_$API_KEY.p8
+
+      #- name: Set XCode version
+      #  uses: maxim-lobanov/setup-xcode@v1
+      #  with:
+      #    xcode-version: ${{ inputs.xcode-version }}
+      - name: Select Xcode 15.2
+        run: sudo xcode-select -s /Applications/Xcode_15.2.app/Contents/Developer
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download iOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.company == 'default' && 'ios-build' || format('{0}-{1}', 'ios-build', inputs.company) }}
+          path: build/ios/
+
+      - name: 'Upload app to TestFlight'
+        uses: apple-actions/upload-testflight-build@v1
+        with: 
+          app-path: build/ios/PhoenixPortal.ipa
+          issuer-id: ${{ secrets.appstore-issuer }}
+          api-key-id: ${{ secrets.appstore-keyid }}
+          api-private-key: ${{ secrets.appstore-private-key }}

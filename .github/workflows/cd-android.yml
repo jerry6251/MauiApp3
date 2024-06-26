@@ -1,0 +1,97 @@
+name: Android Publish
+
+on:
+  workflow_call:
+    inputs:
+      company:
+        required: true
+        type: string
+      app-id:
+        required: false
+        type: string
+      app-title:
+        required: false
+        type: string
+    secrets:
+      KEYSTORE_B64:
+        required: true
+      KEYSTORE_PASSWORD:
+        required: true
+      KEYSTORE_ALIAS:
+        required: true
+
+jobs:
+  build-android:
+    runs-on: windows-latest
+  
+    name: Android Build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+  
+      - name: Set variables
+        run: |
+          Assembly_Name="PhoenixPortal"
+          Build_Path="build/android/"
+          if [[ "${{ inputs.company }}" != 'default' ]]; then
+            Build_Path="build/${{ inputs.company }}/android/"
+            Assembly_Name="PhoenixPortal-${{ inputs.company }}"
+          fi
+          echo $Build_Path
+          echo "Build_Path=$Build_Path" >> $GITHUB_ENV
+          echo $Assembly_Name
+          echo "Assembly_Name=$Assembly_Name" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Override files
+        if: ${{ inputs.company != 'default' }}
+        run:  cp -rv specifics/${{ inputs.company }}/. PhoenixPortal/
+        shell: bash
+
+      - name: Create keystore file
+        run:  echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > $GITHUB_WORKSPACE/signing-key.keystore
+        shell: bash
+  
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+  
+      - name: Install MAUI Workload
+        #run: dotnet workload install maui --ignore-failed-sources
+        run: dotnet workload install maui-android
+  
+      - name: Restore Dependencies
+        run: dotnet restore PhoenixPortal/
+  
+      - name: Publish MAUI Android
+        run: >
+            dotnet publish PhoenixPortal/
+            -c Release
+            -f net8.0-android34.0
+            -p:AndroidKeyStore=true
+            -p:AndroidSigningKeyStore=${{ github.workspace }}/signing-key.keystore
+            -p:AndroidSigningStorePass="${{ secrets.KEYSTORE_PASSWORD }}"
+            -p:AndroidSigningKeyAlias="${{ secrets.KEYSTORE_ALIAS }}"
+            -p:AndroidSigningKeyPass="${{ secrets.KEYSTORE_PASSWORD }}"
+            -p:AppId="${{ inputs.app-id }}"
+            -p:AppTitle="${{ inputs.app-title }}"
+            -o "${{ env.Build_Path }}"
+            -p:CSharpier_Bypass=true
+  
+      - name: Rename file
+        run: |
+          set -e
+  
+          mv ${{ env.Build_Path }}*-Signed.apk ${{ env.Build_Path }}${{ env.Assembly_Name }}.apk
+          mv ${{ env.Build_Path }}*-Signed.aab ${{ env.Build_Path }}${{ env.Assembly_Name }}.aab
+          rm ${{ env.Build_Path }}com.*.aab
+        shell: bash
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          # Can't use double quotes in epxression
+          name: ${{ inputs.company == 'default' && 'android-build' || format('{0}-{1}', 'android-build', inputs.company) }}
+          path: ${{ env.Build_Path }}
+          if-no-files-found: error
