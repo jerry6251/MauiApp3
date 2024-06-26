@@ -20,6 +20,12 @@ jobs:
   
       - name: Install MAUI Workload
         run: dotnet workload install maui-android
+  
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: 22
+          distribution: adopt
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
